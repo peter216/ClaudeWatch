@@ -44,13 +44,32 @@ t "rm -rf cache dir"    allow '{"tool_name":"Bash","tool_input":{"command":"rm -
 t "rm -rf /tmp"         allow '{"tool_name":"Bash","tool_input":{"command":"rm -rf /tmp/build-output"}}'
 t "rm -r /var/tmp"      allow '{"tool_name":"Bash","tool_input":{"command":"rm -r /var/tmp/stale-dir"}}'
 
-echo "--- is_relative_to_cwd: in-tree recursive deletes allowed ---"
-t "rm -r in-tree relative"       allow '{"tool_name":"Bash","cwd":"/work/repo","tool_input":{"command":"rm -r old-dir"}}'
-t "rm -rf in-tree relative dir"  allow '{"tool_name":"Bash","cwd":"/work/repo","tool_input":{"command":"rm -rf src/legacy"}}'
-t "rm -r in-tree dotted path"    allow '{"tool_name":"Bash","cwd":"/work/repo","tool_input":{"command":"rm -r ./build"}}'
-t "rm -rf in-tree absolute"      allow '{"tool_name":"Bash","cwd":"/work/repo","tool_input":{"command":"rm -rf /work/repo/build"}}'
-t "rm -r quoted in-tree path"    allow '{"tool_name":"Bash","cwd":"/work/repo","tool_input":{"command":"rm -r \"my dir\""}}'
-t "rm -r multiple in-tree"       allow '{"tool_name":"Bash","cwd":"/work/repo","tool_input":{"command":"rm -r a b c"}}'
+echo "--- is_recoverable: in-tree AND git-tracked recursive deletes allowed ---"
+## is_recoverable (unlike the old is_relative_to_cwd it replaced here) actually
+## checks the filesystem — a real git-initialized temp repo is required for
+## the "should allow" cases below, since a merely-symbolic cwd like the old
+## /work/repo fixture can no longer satisfy the recoverability check.
+REPO_DIR="$(mktemp -d)"
+trap 'rm -rf "$REPO_DIR"' EXIT
+git -C "$REPO_DIR" init -q
+## git -C <dir> requires <dir> to actually exist (it chdir's before checking
+## repo status) — pre-create the subdirectories the test targets reference,
+## matching the realistic case of rm-ing something that already exists.
+mkdir -p "$REPO_DIR/src"
+t "rm -r in-tree relative"       allow "{\"tool_name\":\"Bash\",\"cwd\":\"$REPO_DIR\",\"tool_input\":{\"command\":\"rm -r old-dir\"}}"
+t "rm -rf in-tree relative dir"  allow "{\"tool_name\":\"Bash\",\"cwd\":\"$REPO_DIR\",\"tool_input\":{\"command\":\"rm -rf src/legacy\"}}"
+t "rm -r in-tree dotted path"    allow "{\"tool_name\":\"Bash\",\"cwd\":\"$REPO_DIR\",\"tool_input\":{\"command\":\"rm -r ./build\"}}"
+t "rm -rf in-tree absolute"      allow "{\"tool_name\":\"Bash\",\"cwd\":\"$REPO_DIR\",\"tool_input\":{\"command\":\"rm -rf $REPO_DIR/build\"}}"
+t "rm -r quoted in-tree path"    allow "{\"tool_name\":\"Bash\",\"cwd\":\"$REPO_DIR\",\"tool_input\":{\"command\":\"rm -r \\\"my dir\\\"\"}}"
+t "rm -r multiple in-tree"       allow "{\"tool_name\":\"Bash\",\"cwd\":\"$REPO_DIR\",\"tool_input\":{\"command\":\"rm -r a b c\"}}"
+
+echo "--- is_recoverable: in-tree but NOT git/chezmoi-tracked still prompts ---"
+## The actual gap this predicate closes: a non-git-tracked working directory
+## (e.g. a bare VS Code workspace root, per session-memo discussion) must NOT
+## be silently exempted just because the target is spatially "under cwd".
+UNTRACKED_DIR="$(mktemp -d)"
+trap 'rm -rf "$REPO_DIR" "$UNTRACKED_DIR"' EXIT
+t "rm -r in-tree but untracked"  ask "{\"tool_name\":\"Bash\",\"cwd\":\"$UNTRACKED_DIR\",\"tool_input\":{\"command\":\"rm -r old-dir\"}}"
 
 echo "--- is_relative_to_cwd: out-of-tree / unresolvable still prompts ---"
 t "rm -r out-of-tree absolute"   ask   '{"tool_name":"Bash","cwd":"/work/repo","tool_input":{"command":"rm -r /etc/foo"}}'

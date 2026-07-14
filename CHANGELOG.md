@@ -1,5 +1,35 @@
 # Changelog
 
+## [LOCAL PATCH — not from upstream chris-peterson/ClaudeWatch]
+
+Applied 2026-07-03 against a local clone at `~/git/thirdparty/ClaudeWatch`, in
+support of the `--auto-guardrails` production rollout (see
+`~/docs/PERMISSION_GUARDRAIL_SMOKE_TEST.md`). Will conflict with `git pull`
+from upstream — reconcile manually or file upstream if this turns out to be
+generally useful.
+
+- **New `is_recoverable` predicate** (`scripts/watchdog.py`), used by
+  `watch-files.yml`'s `rm -rf`/`rm -r` ask rules in place of the shipped
+  `is_relative_to_cwd`. The original predicate only checks that a delete
+  target is spatially under `cwd`, on the *assumption* that makes it
+  recoverable from git history — that assumption is never actually verified.
+  `is_recoverable` requires the target to be under `cwd` **and** to actually
+  be inside a real git work tree or tracked by chezmoi, closing the gap where
+  a non-version-controlled working directory (e.g. a bare VS Code workspace
+  root with individually-vc'd children) got silently exempted anyway.
+  `is_relative_to_cwd` itself is unchanged and still registered, in case
+  anything else references it.
+  Requires two new filesystem/subprocess calls (`git rev-parse
+  --is-inside-work-tree`, `chezmoi managed`) that the original predicate
+  deliberately avoided to stay pure-string/deterministic (SPEC.md RL-16) —
+  an intentional, accepted tradeoff for this local patch, not a change to the
+  upstream determinism contract.
+- `tests/test-watch-files.sh` updated: the "in-tree recursive deletes
+  allowed" cases now use a real `mktemp -d` + `git init` fixture instead of a
+  symbolic `/work/repo` path (which the new filesystem-backed predicate can't
+  satisfy), plus a new case confirming an in-tree-but-untracked directory
+  still prompts.
+
 ## 0.17.1
 
 - Both `/`-invoked skills (`learn`, `rules`) are now marked `disable-model-invocation`, dropping their descriptions from every session's always-resident context. They stay available via `/ClaudeWatch:learn` and `/ClaudeWatch:rules`; Claude no longer auto-loads them.

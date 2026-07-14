@@ -33,6 +33,7 @@ import json
 import os
 import re
 import shlex
+import subprocess
 import sys
 
 
@@ -310,40 +311,37 @@ def _is_compound_command(command):
 _UNRESOLVABLE_TARGET = re.compile(r"[~$`*?\[]|(?:^|/)\.\.(?:/|$)")
 
 
-def _targets_under_cwd(command, cwd):
-    """Whether every deletion target of an `rm` command resolves strictly under `cwd`.
-
-    Pure string analysis (no filesystem access) so the decision stays
-    deterministic. Backs the `is_relative_to_cwd` unless-condition: an in-tree
-    `rm -r` is recoverable from git history, so it need not prompt, while a
-    delete that reaches outside the working directory still does.
-
-    Returns False — decline the exemption, keep the ask — whenever in-tree-ness
-    can't be proven from the text: no cwd, a compound command, a parse failure,
-    a non-`rm` program, no targets, a target that is the working directory
-    itself or a `.git` directory, or any target carrying an unresolvable marker
-    (`~`, `$`, glob, `..`). Only an all-clear set of literal paths strictly
-    under cwd returns True. The working directory itself and any `.git`
-    directory are excluded because the git-history safety net the exemption
-    relies on does not cover wiping the whole tree or its history.
+def _rm_targets_under_cwd(command, cwd):
+    """Extract an `rm` command's deletion targets, resolved to absolute paths,
+    when every one of them can be proven (by pure string analysis, no
+    filesystem access) to resolve strictly under `cwd`. Returns `None` —
+    decline, caller should treat as "not provable" — whenever in-tree-ness
+    can't be established from the text: no cwd, a compound command, a parse
+    failure, a non-`rm` program, no targets, a target that is the working
+    directory itself or a `.git` directory, or any target carrying an
+    unresolvable marker (`~`, `$`, glob, `..`). Shared by `_targets_under_cwd`
+    (the original `is_relative_to_cwd` predicate) and `_targets_recoverable`
+    (which adds an actual recoverability check on top of this same
+    extraction — see that function's docstring for why the two are separate
+    gates rather than one).
     """
     if not cwd:
-        return False
+        return None
     # A compound command is handled by the ask->deny escalation ([OUT-08]); don't
     # let the exemption pre-empt that, and don't try to reason about which tokens
     # belong to which segment.
     if _is_compound_command(command):
-        return False
+        return None
     try:
         tokens = shlex.split(command)
     except ValueError:
-        return False
+        return None
     # Skip leading `VAR=value` assignments and `sudo` to reach the program.
     i = 0
     while i < len(tokens) and (re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", tokens[i]) or tokens[i] == "sudo"):
         i += 1
     if i >= len(tokens) or os.path.basename(tokens[i]) != "rm":
-        return False
+        return None
 
     targets = []
     after_ddash = False
@@ -355,18 +353,109 @@ def _targets_under_cwd(command, cwd):
             continue  # a flag, not a target
         targets.append(tok)
     if not targets:
-        return False
+        return None
 
     cwd_norm = os.path.normpath(cwd)
+    resolved_targets = []
     for tok in targets:
         if _UNRESOLVABLE_TARGET.search(tok):
-            return False
+            return None
         resolved = os.path.normpath(tok if os.path.isabs(tok) else os.path.join(cwd_norm, tok))
         if resolved == cwd_norm or not resolved.startswith(cwd_norm + os.sep):
-            return False
+            return None
         if ".git" in os.path.relpath(resolved, cwd_norm).split(os.sep):
+            return None
+        resolved_targets.append(resolved)
+    return resolved_targets
+
+
+def _targets_under_cwd(command, cwd):
+    """Whether every deletion target of an `rm` command resolves strictly under `cwd`.
+
+    Pure string analysis (no filesystem access) so the decision stays
+    deterministic. Backs the `is_relative_to_cwd` unless-condition: an in-tree
+    `rm -r` is *assumed* recoverable from git history, so it need not prompt,
+    while a delete that reaches outside the working directory still does.
+    This assumption is unchecked — see `_targets_recoverable` for a variant
+    that actually verifies it rather than inferring it from location alone.
+    """
+    return _rm_targets_under_cwd(command, cwd) is not None
+
+
+def _is_in_git_worktree(path):
+    """Whether `path`'s containing directory is inside a real git work tree.
+
+    Requires a filesystem/subprocess call (`git -C <dir> rev-parse
+    --is-inside-work-tree`) — unlike `_targets_under_cwd`, this cannot be pure
+    string analysis, because "is this actually a git repo" is not knowable
+    from the command text alone. Fails closed (returns False) on any error —
+    git not on PATH, timeout, non-repo — so a check that can't be completed
+    never silently grants the exemption.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "-C", os.path.dirname(path) or ".", "rev-parse", "--is-inside-work-tree"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        return result.returncode == 0 and result.stdout.strip() == "true"
+    except Exception:
+        return False
+
+
+def _is_chezmoi_managed(path):
+    """Whether `path` itself (not just some descendant) is tracked by chezmoi.
+
+    `chezmoi managed --path-style=absolute <path>` lists managed entries at or
+    under `path`; an exact line match against the resolved path (not merely
+    non-empty output) confirms the path itself is managed, rather than being
+    an untracked file that happens to sit under a directory with unrelated
+    managed content elsewhere. Fails closed (returns False) on any error —
+    chezmoi not installed, timeout, not a chezmoi-managed machine — same
+    reasoning as `_is_in_git_worktree`.
+    """
+    try:
+        result = subprocess.run(
+            ["chezmoi", "managed", "--path-style=absolute", path],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        if result.returncode != 0:
             return False
-    return True
+        return path in result.stdout.splitlines()
+    except Exception:
+        return False
+
+
+def _targets_recoverable(command, cwd):
+    """Whether every deletion target of an `rm` command is BOTH under `cwd`
+    AND actually recoverable — inside a real git work tree, or tracked by
+    chezmoi — rather than merely assumed recoverable by virtue of location.
+
+    This is deliberately a stricter, separate predicate from
+    `is_relative_to_cwd` / `_targets_under_cwd`, not a replacement for it:
+    "under cwd" is a *scope* gate (the agent had an obvious reason to be
+    there — mirrors auto mode's own "Local Operations" exception, which
+    likewise limits to project scope), while this predicate additionally
+    verifies the *recoverability* assumption that gate's original rationale
+    depends on, instead of taking it on faith. A `/tmp`-style scratch
+    directory (already exempted via `unless_regex` in watch-files.yml) is
+    intentionally NOT run through this check — ephemeral scratch space isn't
+    expected to be tracked by anything, and requiring it to be would defeat
+    that separate exemption's purpose.
+
+    Involves real filesystem/subprocess calls (see `_is_in_git_worktree`,
+    `_is_chezmoi_managed`), unlike the pure-string `_targets_under_cwd` this
+    builds on — see those functions' docstrings for why that tradeoff is
+    unavoidable here: recoverability is a fact about the filesystem, not
+    something derivable from command text alone.
+    """
+    targets = _rm_targets_under_cwd(command, cwd)
+    if targets is None:
+        return False
+    return all(_is_in_git_worktree(t) or _is_chezmoi_managed(t) for t in targets)
 
 
 # Named predicates an `unless_condition` entry can reference. Each takes the bash
@@ -375,6 +464,7 @@ def _targets_under_cwd(command, cwd):
 # name surfaces as a config-error deny rather than silently never matching.
 _PREDICATES = {
     "is_relative_to_cwd": _targets_under_cwd,
+    "is_recoverable": _targets_recoverable,
 }
 
 
