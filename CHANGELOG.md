@@ -29,6 +29,23 @@ generally useful.
   symbolic `/work/repo` path (which the new filesystem-backed predicate can't
   satisfy), plus a new case confirming an in-tree-but-untracked directory
   still prompts.
+- **2026-07-24, `watches/watch-secrets.yml`**: the `env / printenv` ask rule
+  gained a negative lookahead excluding "env"/"printenv" followed by
+  "var(s)"/"file(s)"/"variable(s)" — confirmed false positive twice in one
+  session on git commit messages containing ordinary prose ("...env var...",
+  "...profile's env file...") that satisfied the old pattern's boundary
+  check despite not being a shell command invocation. Verified against both
+  the false-positive cases and real `env`/`printenv` invocations (piped,
+  semicolon-separated, with args) before landing — all behave as intended.
+  Not a general fix (regex can't reliably distinguish "inside a quoted
+  string" from "an actual command" without real tokenization); narrowly
+  targets the specific prose this rule had actually misfired on.
+- **2026-07-24, `watches/watch-git.yml`**: applied the `git push`
+  `unless_regex` carve-out drafted in `~/.claude/claudewatch/2-week-review-notes.md`
+  (memo-branch scratch-clone pushes from `/tmp/claude-memos-session`) —
+  confirmed Tier 2 false positive twice, sat drafted-but-unapplied since
+  that finding. Verified the carve-out doesn't accidentally exempt a push
+  to `main` from the same scratch clone.
 
 ## 0.17.1
 

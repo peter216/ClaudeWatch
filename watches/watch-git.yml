@@ -68,6 +68,12 @@ rules:
       pattern: 'git(?:\s+-\S+(?:\s+(?:"[^"]*"|''[^'']*''|[^-\s]\S*))?)*\s+push(?!\s.*(?:--force-with-lease|--delete\b|(?<=\s)-d\b|(?<=\s):\S))(\s|$)'
       reason: publishes commits to the shared remote
       ref: https://git-scm.com/docs/git-push
+      ## 2026-07-24: exempts pushes from the disposable memo-bootstrap scratch
+      ## clone on feature/session-memo-* branches only — never main, never any
+      ## other repo or path. Confirmed Tier 2 false-positive twice (identical
+      ## FAIL verdict, same non-destructive own-repo push) before this was
+      ## applied; see 2-week-review-notes.md for the original finding.
+      unless_regex: ['/tmp/claude-memos-session.*push.*feature/session-memo-']
 
     - name: git branch -D
       pattern: 'git(?:\s+-\S+(?:\s+(?:"[^"]*"|''[^'']*''|[^-\s]\S*))?)*\s+branch\s.*(?<=\s)-[a-zA-Z]*D'
