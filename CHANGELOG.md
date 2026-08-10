@@ -46,6 +46,16 @@ generally useful.
   confirmed Tier 2 false positive twice, sat drafted-but-unapplied since
   that finding. Verified the carve-out doesn't accidentally exempt a push
   to `main` from the same scratch clone.
+- **2026-08-09, `watches/watch-files.yml`**: the `chmod` ask rule gained an
+  `unless_regex` exempting common permission-*narrowing* octal modes
+  (600/640/644/700/750/755) — confirmed false positive (memo-046: `chmod 700`
+  misclassified by the now-retired Tier 2 reviewer as "allowing unauthorized
+  access", inverting the actual direction of the change). Narrow on purpose:
+  only the specific safe/hardening values actually seen in this corpus's
+  history are exempted; `777`, `666`, symbolic `o+w`/`g+w`, and anything else
+  not on the list still asks. `tests/test-watch-files.sh` updated to match
+  (the two prior "ask" expectations for `644`/`755` are now "allow"; two new
+  cases confirm `664` and symbolic `o+w` still ask).
 
 ## 0.17.1
 

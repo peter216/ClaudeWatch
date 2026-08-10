@@ -50,6 +50,15 @@ rules:
 
     - name: chmod
       pattern: 'chmod\s+'
+      ## 2026-08-09: exempts common permission-*narrowing* octal modes
+      ## (600/640/644/700/750/755) — confirmed Tier 2 false positive
+      ## (memo-046: chmod 700 misclassified as "allowing unauthorized
+      ## access", inverting the actual direction of the change). Anything
+      ## else — 777, 666, symbolic o+w/g+w, or any mode not in this list —
+      ## still asks. Narrow on purpose: these are the specific safe/hardening
+      ## values actually seen in this corpus's history, not a general
+      ## loosening of the chmod gate.
+      unless_regex: ['chmod\s+(-R\s+)?(600|640|644|700|750|755)\b']
       reason: changes file permissions
       ref: https://man7.org/linux/man-pages/man1/chmod.1.html
 

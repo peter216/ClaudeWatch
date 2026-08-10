@@ -31,9 +31,14 @@ t "rm -r dir"        ask   '{"tool_name":"Bash","tool_input":{"command":"rm -r o
 echo "--- ask: mv / ---"
 t "mv /etc"          ask   '{"tool_name":"Bash","tool_input":{"command":"mv /etc/config /etc/config.bak"}}'
 
-echo "--- ask: chmod ---"
-t "chmod 644"        ask   '{"tool_name":"Bash","tool_input":{"command":"chmod 644 readme.md"}}'
-t "chmod -R 755"     ask   '{"tool_name":"Bash","tool_input":{"command":"chmod -R 755 ./dist"}}'
+echo "--- allow: chmod permission-narrowing modes (2026-08-09 carve-out) ---"
+t "chmod 644"        allow '{"tool_name":"Bash","tool_input":{"command":"chmod 644 readme.md"}}'
+t "chmod -R 755"     allow '{"tool_name":"Bash","tool_input":{"command":"chmod -R 755 ./dist"}}'
+t "chmod 700"        allow '{"tool_name":"Bash","tool_input":{"command":"chmod 700 secrets/"}}'
+
+echo "--- ask: chmod modes not on the narrowing allowlist ---"
+t "chmod 664"        ask   '{"tool_name":"Bash","tool_input":{"command":"chmod 664 readme.md"}}'
+t "chmod symbolic o+w" ask '{"tool_name":"Bash","tool_input":{"command":"chmod o+w file.txt"}}'
 
 echo "--- ask: chown ---"
 t "chown user"       ask   '{"tool_name":"Bash","tool_input":{"command":"chown www-data:www-data index.html"}}'
